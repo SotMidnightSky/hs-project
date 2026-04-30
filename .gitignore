@@ -1,1 +1,9 @@
 .DS_Store
+HW_HardwareTrojanLab/PROJECT_PLAN.md
+HW_HardwareTrojanLab/parse_nb.py
+HW_HardwareTrojanLab/.env
+**/.env
+*.log
+HW_HardwareTrojanLab/.env
+HW_HardwareTrojanLab/__pycache__/
+.venv/

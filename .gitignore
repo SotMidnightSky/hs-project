@@ -7,3 +7,10 @@ HW_HardwareTrojanLab/.env
 HW_HardwareTrojanLab/.env
 HW_HardwareTrojanLab/__pycache__/
 .venv/
+batch_trojan_designs/
+trojaned_outputs/
+HW_HardwareTrojanLab/report.aux
+
+HW_HardwareTrojanLab/validation_log.txt
+HW_HardwareTrojanLab/report.out
+HW_HardwareTrojanLab/validation_log.txt

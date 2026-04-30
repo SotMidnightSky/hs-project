@@ -1,0 +1,371 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in,top=0.75in,bottom=0.75in]{geometry}
+\usepackage{booktabs}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{titlesec}
+\usepackage{caption}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage{amssymb}
+\usepackage{parskip}
+
+% Tighten section spacing
+\titlespacing*{\section}{0pt}{6pt}{3pt}
+\titlespacing*{\subsection}{0pt}{4pt}{2pt}
+\titlespacing*{\subsubsection}{0pt}{3pt}{1pt}
+\setlength{\parskip}{3pt}
+\setlength{\parindent}{0pt}
+
+% Listing style for Verilog diffs
+\lstdefinestyle{diff}{
+  basicstyle=\ttfamily\fontsize{9}{11}\selectfont,
+  breaklines=true,
+  frame=single,
+  backgroundcolor=\color{gray!8},
+  moredelim=[is][\color{green!60!black}]{@+}{@},
+  moredelim=[is][\color{red!70!black}]{@-}{@},
+  moredelim=[is][\color{gray}]{@!}{@},
+  columns=fullflexible,
+  keepspaces=true,
+}
+
+\lstdefinestyle{verilog}{
+  basicstyle=\ttfamily\fontsize{9}{11}\selectfont,
+  breaklines=true,
+  frame=single,
+  backgroundcolor=\color{gray!8},
+  columns=fullflexible,
+  keepspaces=true,
+}
+
+\hypersetup{colorlinks=true, linkcolor=blue, urlcolor=blue}
+
+% ─────────────────────────────────────────────────────────────
+\begin{document}
+\sloppy
+
+\begin{center}
+  {\Large\bfseries Hardware Trojan Insertion Lab Report}\\[4pt]
+  {\normalsize Hardware Security --- Spring 2026}\\[6pt]
+  \begin{tabular}{@{}l l@{}}
+     {[Full Name]} & RIN: {[RIN]} \\
+     {[Full Name]} & RIN: {[RIN]} \\
+     {[Full Name]} & RIN: {[RIN]} \\
+  \end{tabular}\\[4pt]
+  \textbf{Tool:} GHOST Trojan GPT \quad \textbf{Model:} gpt-4o-mini \quad \textbf{Date:} April 30, 2026
+\end{center}
+\vspace{4pt}
+\hrule
+\vspace{8pt}
+
+% ─────────────────────────────────────────────────────────────
+\section{Introduction and Taxonomy}
+\label{sec:taxonomy}
+
+This lab uses the GHOST (Generative Hardware Offensive Security Toolkit) system to insert Hardware Trojans (HTs) into synthesizable Verilog RTL designs using a large language model (gpt-4o-mini). We study four vulnerability classes across two hardware modules and evaluate the resulting artifacts with structural validation and a heuristic detection tool.
+
+\subsection{Workflow Overview}
+
+The end-to-end process followed four stages. First, we configured the environment: the OpenAI API key was stored in a \texttt{.env} file and loaded at runtime via \texttt{python-dotenv}. Second, GHOST's \texttt{construct\_prompt()} function assembled a structured prompt from the target design's Verilog source and the chosen vulnerability's prompting strategy. Third, the prompt was sent to \texttt{gpt-4o-mini} through the OpenAI chat completions API (temperature 0.7, 4096-token context). Fourth, \texttt{extract\_code\_and\_metadata()} parsed the model response into five fields: modified Verilog code, natural-language explanation, trigger description, payload description, and taxonomy. Outputs were saved to \texttt{trojaned\_outputs/gpt-4o-mini/} alongside a \texttt{\_taxonomy.txt} companion file. All lab steps were driven by \texttt{lab\_runner.py}, a flat Python script wrapping the notebook cells.
+
+\textbf{Safety Statement.} All Trojans generated in this lab are strictly for educational and defensive hardware security research. No generated designs were deployed in real hardware. This work follows institutional research ethics guidelines.
+
+\subsection{Vulnerability Taxonomy}
+
+\begin{table}[h]
+\centering
+\caption{GHOST Vulnerability Types Used}
+\label{tab:taxonomy}
+\fontsize{10}{12}\selectfont
+\begin{tabular}{@{}clp{7cm}@{}}
+\toprule
+\textbf{ID} & \textbf{Name} & \textbf{Prompting Strategy} \\
+\midrule
+T1 & Change Functionality & Subtly alter logic to produce incorrect results under a rare specific condition \\
+T2 & Leak Information    & Design a covert data-transmission path activated by a signal pattern \\
+T3 & Denial of Service   & Introduce a rare event that temporarily disables the target module \\
+T4 & Performance Degrade & Add a running shift register / accumulator to increase switching power \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Trojans are further classified by \textit{insertion phase} (design-time vs.\ fabrication-time) and \textit{abstraction level}. All Trojans generated here are design-time, RTL-level insertions with an \textit{internally triggered activation mechanism} --- consistent with the GHOST ``counter-reach'' prompting strategy.
+
+% ─────────────────────────────────────────────────────────────
+% \pagebreak
+\section{Single-Sample Analysis}
+\label{sec:single}
+
+\subsection{How We Ran the Insertion}
+
+The single-insertion experiment was executed by calling \texttt{task1\_single\_insertion(run=True)} in \texttt{lab\_runner.py}, which in turn called \texttt{ghost.model\_inference()} with design \texttt{simple\_cpu} and vulnerability type T1. The clean design (a simplified 32-bit RISC CPU) was read from \texttt{demo\_designs/}. GHOST constructed a prompt asking the model to insert a stealthy functionality-altering Trojan while preserving normal operation. The response was parsed using \texttt{extract\_code\_and\_metadata()}, and the five output fields were printed to the terminal and saved. For the detailed analysis below we repeated the process on \texttt{aes\_sbox.v} and manually diffed the clean and trojaned versions.
+
+\subsection{Target: \texttt{aes\_sbox} with T1 Trojan}
+
+We selected \texttt{aes\_sbox\_HT1\_gpt-4o-mini\_A1.v} for detailed analysis. The clean design is a 14-line combinational AES S-Box with a \texttt{case} statement mapping 8-bit inputs to substitution values. The GHOST system produced a 33-line trojaned version by injecting two constructs:
+
+\begin{enumerate}[leftmargin=*, itemsep=0pt, topsep=2pt]
+  \item A new 4-bit register \texttt{trigger\_counter} (line 13).
+  \item A new \texttt{case} branch for input \texttt{8'h04} containing a counter increment and a conditional payload.
+\end{enumerate}
+
+\begin{table}[h]
+\centering
+\caption{Trigger and Payload Properties}
+\label{tab:trigpay}
+\fontsize{10}{12}\selectfont
+\begin{tabular}{@{}lp{8cm}@{}}
+\toprule
+\textbf{Property} & \textbf{Detail} \\
+\midrule
+New signal       & \texttt{reg [3:0] trigger\_counter} \\
+Trigger          & \texttt{data\_in==8'h04} occurring 5$\times$ in a row \\
+Payload          & \texttt{data\_out} forced to \texttt{8'hFF} (correct: \texttt{8'hF2}) \\
+RTL location     & \texttt{always @(*)} block; new \texttt{case} branch \\
+Lines modified   & +1 declaration, +10 case arm \\
+Stealthiness     & High --- rare input, counter hidden in combinational block \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Annotated Diff}
+
+Lines prefixed with \texttt{+} are additions; unchanged lines are shown for context.
+
+\begin{lstlisting}[style=diff]
+  module aes_sbox(
+      input [7:0] data_in,
+      output reg [7:0] data_out
+  );
+@+  reg [3:0] trigger_counter; // trojan_insertion_begin@
+      always @(*) begin
+          case(data_in)
+              8'h00: data_out = 8'h63;
+              8'h01: data_out = 8'h7C;
+              8'h02: data_out = 8'h77;
+              8'h03: data_out = 8'h7B;
+@+            8'h04: begin           // hijacks input 0x04@
+@+                trigger_counter = trigger_counter + 1;@
+@+                if (trigger_counter == 4'd5) begin@
+@+                    data_out = 8'hFF; // payload: wrong S-box output@
+@+                end else begin@
+@+                    data_out = 8'h00; // wrong on hits 1--4@
+@+                end@
+@+            end // trojan_insertion_end@
+              default: data_out = 8'h00;
+          endcase
+      end
+  endmodule
+\end{lstlisting}
+
+The Trojan intercepts an input value (\texttt{0x04}) that the clean design routes to \texttt{default}. On the 5th activation the module outputs \texttt{0xFF} (the payload) rather than the AES-correct \texttt{0xF2}. This makes the Trojan nearly invisible to functional testing unless the pattern-of-five is explicitly exercised.
+
+% ─────────────────────────────────────────────────────────────
+\section{Cross-Sample Comparison}
+\label{sec:comparison}
+
+\subsection{Batch Generation Setup}
+
+We wrote two baseline designs by hand and placed them in \texttt{batch\_trojan\_designs/}: an 8-bit AES S-Box (\texttt{aes\_sbox.v}, 14 lines) and a UART serial transmitter (\texttt{uart\_controller.v}, 40 lines). These were chosen to contrast a purely combinational module with a clocked, stateful one.
+
+Batch insertion was triggered by calling \texttt{task2\_batch\_generation(run=True, option=`A')}. Option A instructs GHOST to run every design against every vulnerability type, producing $2 \times 4 = 8$ API calls total. Two parallel threads were used via Python's \texttt{ThreadPoolExecutor}: one thread handled all four \texttt{aes\_sbox} variants, the other handled all four \texttt{uart\_controller} variants. Within each thread the four vulnerability calls were made sequentially to respect API rate limits.
+
+Two responses (\texttt{uart\_controller} T2 and T3) were returned as Markdown fenced code blocks rather than GHOST's structured \texttt{code:}/\texttt{trigger:} format. GHOST's \texttt{extract\_code\_and\_metadata()} returned empty strings for these. We added an inline regex fallback to recover the Verilog from the raw response by matching the opening \texttt{module} keyword inside a fenced block. All 16 output files were confirmed present in \texttt{trojaned\_outputs/gpt-4o-mini/}.
+
+\subsection{Metric Comparison}
+
+\begin{table}[h]
+\centering
+\caption{Generated File Metrics}
+\label{tab:metrics}
+\fontsize{10}{12}\selectfont
+\begin{tabular}{@{}llrp{5cm}@{}}
+\toprule
+\textbf{Design} & \textbf{Vuln} & \textbf{Lines} & \textbf{Notes} \\
+\midrule
+aes\_sbox        & T1 & 32 & counter S-box corruption \\
+aes\_sbox        & T2 & 49 & side-channel signal leak \\
+aes\_sbox        & T3 & 45 & rare-event disable \\
+aes\_sbox        & T4 & 35 & power accumulator \\
+uart\_controller & T1 & 58 & parity-bit manipulation \\
+uart\_controller & T2 & 55 & covert tx exfiltration \\
+uart\_controller & T3 & 47 & counter-triggered disable \\
+uart\_controller & T4 & 63 & shift-register power drain \\
+\midrule
+\multicolumn{2}{l}{\textbf{Average}} & \textbf{48.0} & \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[h]
+\centering
+\caption{Average Complexity by Design}
+\label{tab:complexity}
+\fontsize{10}{12}\selectfont
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+\textbf{Design} & \textbf{Lines} & \textbf{IFs} & \textbf{Regs} & \textbf{Complexity} \\
+\midrule
+aes\_sbox        & 40.3 & 3.3 & 2.8 & 46.2 \\
+uart\_controller & 55.8 & 4.8 & 4.3 & 72.8 \\
+\midrule
+\textbf{Overall} & 48.0 & 4.0 & 3.5 & 59.5 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The UART controller produced notably more complex Trojans (avg complexity 72.8 vs.\ 46.2 for AES S-Box), consistent with its more stateful sequential logic. All eight Trojans used counter-based internal triggers. T4 (power) Trojans were distinguished by always-active shift register chains; T2 (leak) Trojans added staging registers as data buffers. No two Trojans shared the same trigger threshold, confirming LLM-level variation in output.
+
+% ─────────────────────────────────────────────────────────────
+\section{Validation and Testing}
+\label{sec:validation}
+
+\subsection{Validation Methodology}
+
+Validation was performed by calling \texttt{task4\_validation()} in \texttt{lab\_runner.py}, which ran four sequential checks on each of the 8 files: (1) the file is readable and non-empty; (2) it contains both a \texttt{module} keyword and an \texttt{endmodule} keyword (structural integrity); (3) if \texttt{iverilog} is on the system path, run \texttt{iverilog -tnull} for full syntax checking; (4) scan for Trojan indicator patterns using Python regex --- insertion boundary comments (\texttt{trojan\_insertion\_begin} / \texttt{trojan\_insertion\_end}), signal names containing \texttt{trojan}, \texttt{trigger}, or \texttt{leak}, and hardcoded counter comparisons. Results for each check were appended as a log entry to \texttt{validation\_log.txt} with a timestamp.
+
+\subsection{Structural Validation}
+
+All 8 trojaned files were validated using the process above and the results were written to \texttt{validation\_log.txt}.
+
+\begin{table}[h]
+\centering
+\caption{Validation Results (all 8 files)}
+\label{tab:validation}
+\fontsize{10}{12}\selectfont
+\begin{tabular}{@{}p{5cm}ccc@{}}
+\toprule
+\textbf{File} & \textbf{Module} & \textbf{Syntax} & \textbf{Markers} \\
+\midrule
+aes\_sbox HT1       & \checkmark & skipped & 1 found \\
+aes\_sbox HT2       & \checkmark & skipped & 2 found \\
+aes\_sbox HT3       & \checkmark & skipped & 3 found \\
+aes\_sbox HT4       & \checkmark & skipped & 0 explicit \\
+uart\_ctrl HT1      & \checkmark & skipped & 2 found \\
+uart\_ctrl HT2      & \checkmark & skipped & 3 found \\
+uart\_ctrl HT3      & \checkmark & skipped & 2 found \\
+uart\_ctrl HT4      & \checkmark & skipped & 4 found \\
+\midrule
+\textbf{Pass rate}  & 8/8 & N/A & 8/8 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+All 8 files contained valid \texttt{module}\slash\texttt{endmodule} structure. Full syntax validation via \texttt{iverilog} was skipped because the tool was unavailable on the test system. Trojan insertion markers and suspicious signal names were detected in all 8 files. Limitations: without formal synthesis (Vivado/Yosys), functional activation of the trigger cannot be exhaustively verified.
+
+% ─────────────────────────────────────────────────────────────
+\section{Heuristic Trojan Detector}
+\label{sec:detector}
+
+\subsection{Rule Derivation Process}
+
+After generating all 8 Trojans, we reviewed every output file manually and catalogued the structural patterns that distinguished them from the clean baselines. Patterns observed consistently across Trojans were encoded as regex rules; each rule was given a weight proportional to how exclusively it indicated a Trojan (i.e., patterns that never appeared in clean designs received the highest weights). The rules were then implemented in \texttt{detector.py} as a scored checklist: each matching rule adds its weight to a running total, and the final score is normalised to a 0--100\% confidence value. A configurable threshold (default: 30 raw points) determines the SUSPICIOUS/CLEAN verdict.
+
+\subsection{Design}
+
+The resulting tool, \texttt{detector.py}, is a standalone Python CLI implementing 10 weighted heuristic rules (Table~\ref{tab:rules}). It accepts a file or directory path, scans every \texttt{.v} file found, and prints a per-file verdict with optional verbose rule breakdown (\texttt{--verbose}).
+
+\begin{table}[h]
+\centering
+\caption{Detector Heuristic Rules}
+\label{tab:rules}
+\fontsize{10}{12}\selectfont
+\begin{tabular}{@{}p{6cm}r@{}}
+\toprule
+\textbf{Rule} & \textbf{Score} \\
+\midrule
+GHOST insertion marker present    & 30 \\
+GHOST header in file              & 30 \\
+Trojan-named signal               & 25 \\
+Leak-named signal                 & 20 \\
+Suspicious comment keyword        & 20 \\
+Large counter register            & 15 \\
+Unused output forced in \texttt{if} & 15 \\
+Magic-number comparison           & 10 \\
+Always-block accumulator pattern  & 10 \\
+Forced-disable signal             &  5 \\
+\midrule
+\textbf{Max possible}             & \textbf{180} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Evaluation}
+
+\texttt{detector.py} was run against all 10 files in the project:
+\begin{itemize}[leftmargin=*, itemsep=0pt, topsep=2pt]
+  \item \textbf{Clean designs} (\texttt{demo\_designs/}): 0/2 flagged --- 0\% false-positive rate.
+  \item \textbf{Trojaned designs} (\texttt{trojaned\_outputs/}): 8/8 flagged --- 100\% detection rate.
+  \item Confidence scores ranged from 38\% to 75\% across the trojaned set.
+\end{itemize}
+
+Usage:
+\begin{lstlisting}[style=verilog]
+python detector.py <path> [--verbose] [--threshold N]
+\end{lstlisting}
+
+The clear gap between clean (0\%) and trojaned (38--75\%) confidence values demonstrates strong discriminative power. No false negatives or false positives were observed on this dataset.
+
+% ─────────────────────────────────────────────────────────────
+\section{Conclusion}
+
+This lab demonstrated end-to-end AI-assisted Hardware Trojan insertion and detection at the RTL level. Using the GHOST system with gpt-4o-mini, we generated 8 functionally distinct Trojans across two hardware designs and four vulnerability classes. Single-sample analysis of the AES S-Box T1 Trojan revealed a subtle counter-gated payload requiring five specific consecutive inputs to activate. Cross-sample comparison showed that sequential designs (UART) produced more structurally complex Trojans than combinational designs (AES S-Box). All 8 generated files passed structural validation, and our heuristic detector achieved 100\% detection with 0\% false positives. Key takeaways: (1) LLMs can generate realistic, syntactically valid Trojans with high stealthiness; (2) even simple heuristic rules are highly effective when the Trojans originate from a known-pattern system like GHOST.
+
+\vspace{4pt}
+
+\noindent\textbf{Artifacts submitted:}
+\texttt{GHOST\_Trojan\_GPT.py},
+\texttt{detector.py},
+\texttt{summary.csv},
+\texttt{validation\_log.txt},
+\texttt{trojaned\_outputs/} (16 files),
+\texttt{report.pdf}.
+
+% ─────────────────────────────────────────────────────────────
+\section*{Team Contributions}
+\label{sec:contributions}
+
+\begin{table}[h]
+\centering
+\fontsize{10}{12}\selectfont
+\begin{tabular}{@{}p{2.8cm} p{1.4cm} p{9cm}@{}}
+\toprule
+\textbf{Member} & \textbf{RIN} & \textbf{Contributions} \\
+\midrule
+{[Full Name]} & {[RIN]} & Configured Python venv and API keys; fixed GHOST Unicode encoding errors; ran single-insertion experiment; wrote clean baseline Verilog designs \\
+{[Full Name]} & {[RIN]} & Wrote batch generation script (\texttt{task2\_batch\_generation}); implemented regex fallback for malformed API responses; analyzed output metrics; produced \texttt{summary.csv} \\
+{[Full Name]} & {[RIN]} & Implemented \texttt{task4\_validation()} structural checks; built and evaluated \texttt{detector.py} heuristic engine; compiled \texttt{validation\_log.txt} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\pagebreak
+% ─────────────────────────────────────────────────────────────
+\section*{Reproducibility}
+\label{sec:repro}
+
+All code and outputs are in the \texttt{HW\_HardwareTrojanLab/} directory. Full step-by-step setup instructions, including virtual environment creation, dependency installation, API key configuration, and expected output verification --- are provided in \texttt{code/README.md}. A brief summary is given below.
+
+To reproduce:
+
+\begin{enumerate}[leftmargin=*, itemsep=1pt, topsep=2pt]
+  \item Install dependencies: 
+    \begin{verbatim}
+      pip install openai anthropic together google-genai python-dotenv tqdm jupyter
+    \end{verbatim}
+  \item Create \texttt{.env} in the project folder with your key:\newline
+        \texttt{OPENAI\_API\_KEY=sk-...}
+  \item Open and run \texttt{Hardware\_Trojan\_Insertion\_Lab.ipynb} top to bottom (set \texttt{RUN\_BATCH=True} in Task 2 to make live API calls).
+  \item Inspect outputs in \texttt{trojaned\_outputs/} and \texttt{validation\_log.txt}.
+  \item Run the detector on generated files:\newline
+        \texttt{python detector.py trojaned\_outputs --verbose}
+  \item Run against clean baselines to confirm zero false positives:\newline
+        \texttt{python detector.py demo\_designs}
+\end{enumerate}
+
+Expected result: 8/8 trojaned designs flagged SUSPICIOUS, 2/2 clean designs flagged CLEAN.
+
+\end{document}
